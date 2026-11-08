@@ -4,11 +4,11 @@
 
 Servicio HTTP desarrollado con FastAPI para consultar estudiantes históricos y gestionar matrículas nuevas. Se ejecuta con Docker Compose e incluye una API, MariaDB para matrículas y cuatro motores históricos:
 
-- **MariaDB** guarda las matrículas y los datos de prueba de `data/Central.csv`; permite crearlas, modificarlas y eliminarlas.
+- **MariaDB** replica las matrículas guardadas en SQLite y conserva los datos de prueba de `data/Central.csv`; permite modificarlas y eliminarlas.
 - **Derby, HSQLDB, H2 y Oracle** alojan los registros históricos de las cuatro casas. La API los consulta, sin ofrecer operaciones de escritura sobre ellos.
 - **SQLite** guarda primero las matrículas nuevas y conserva temporalmente resultados históricos para acelerar consultas repetidas. MariaDB replica esas matrículas.
 
-La consulta de estudiantes combina MariaDB con los datos históricos y evita duplicados. Las búsquedas por identificador admiten IDs base con variantes. Los datos CSV se usan para inicializar las tablas históricas vacías y las matrículas de Central en MariaDB.
+La consulta de estudiantes combina las matrículas de SQLite y MariaDB con los datos históricos y evita duplicados. Las búsquedas por identificador admiten IDs base con variantes. Los datos CSV se usan para inicializar las tablas históricas vacías y las matrículas de Central en MariaDB.
 
 ## Cómo funciona
 
@@ -20,7 +20,7 @@ La inicialización puede crear tablas y cargar los CSV cuando las tablas están 
 
 ## Por qué está organizado así
 
-Separar matrículas nuevas de los registros históricos evita modificar las fuentes históricas. La caché SQLite reduce consultas repetidas sin convertirse en la fuente de verdad. Docker Compose reúne la API y sus dependencias, de modo que otro equipo pueda iniciar el conjunto sin instalar localmente Java, JDBC ni los cinco servidores de base de datos. La clave y las contraseñas se generan en el equipo destino, en lugar de trasladar credenciales del PC original.
+Separar matrículas nuevas de los registros históricos evita modificar las fuentes históricas. Las matrículas nuevas se guardan primero en SQLite y después se replican en MariaDB; la caché de históricos reduce consultas repetidas sin sustituir a las fuentes originales. Docker Compose reúne la API y sus dependencias, de modo que otro equipo pueda iniciar el conjunto sin instalar localmente Java, JDBC ni los cinco servidores de base de datos. La clave y las contraseñas se generan en el equipo destino, en lugar de trasladar credenciales del PC original.
 
 ## Contenido
 
@@ -73,9 +73,9 @@ Requisitos: Docker Desktop con contenedores Linux, Python 3 para generar la conf
 | GET | `/salud` | Estado del servicio |
 | GET | `/estudiantes?name=Ana&house=Central&limit=20` | Búsqueda por nombre/casa |
 | GET | `/estudiantes/{student_id}` | Detalle o coincidencias por ID |
-| POST | `/matriculas` | Alta en MariaDB |
-| PUT | `/matriculas/{student_id}` | Modificación en MariaDB |
-| DELETE | `/matriculas/{student_id}` | Baja en MariaDB |
+| POST | `/matriculas` | Alta: primero SQLite y después MariaDB |
+| PUT | `/matriculas/{student_id}` | Modificación en MariaDB y en su copia local |
+| DELETE | `/matriculas/{student_id}` | Baja en MariaDB y en su copia local |
 
 Consulta `/docs` para los campos exactos, parámetros y respuestas actuales. La API también conserva alias en inglés para clientes anteriores.
 
