@@ -22,7 +22,4 @@ for name, url in urls.items():
 PY
 COPY app ./app
 COPY data ./data
-# Render inyecta PORT (10000 por defecto); en local y en compose se usa 8000.
-ENV PORT=8000
-EXPOSE 8000
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
