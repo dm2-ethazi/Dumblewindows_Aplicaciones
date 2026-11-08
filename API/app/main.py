@@ -363,8 +363,11 @@ def cache(key: str, payload: Any) -> None:
 @app.on_event("startup")
 def startup() -> None:
     """Prepara MariaDB, SQLite y, si es necesario, las casas históricas."""
-    Base.metadata.create_all(engine)
-    create_central_enrollments()
+    try:
+        Base.metadata.create_all(engine)
+        create_central_enrollments()
+    except Exception as error:
+        print(f"MariaDB no disponible, se arranca sin matriculas centrales: {error}", flush=True)
     cache_db().close()
     time.sleep(3)
     create_history_tables()
