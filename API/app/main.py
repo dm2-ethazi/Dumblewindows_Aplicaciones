@@ -48,7 +48,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Date, DateTime, Integer, String, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-MARIADB_URL = os.getenv("MARIADB_URL", "mysql+pymysql://hogwarts_app:hogwarts_app@mariadb:3306/hogwarts")
+MARIADB_URL = os.getenv("MARIADB_URL", "").strip()
+# Sin MariaDB configurada la API guarda las matriculas en un SQLite local.
+USE_SQLITE = not MARIADB_URL
+DATA_PATH = Path(os.getenv("DATA_PATH", "/data/hogwarts.sqlite3"))
+if USE_SQLITE:
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MARIADB_URL = f"sqlite:///{DATA_PATH.as_posix()}"
 # SQLite es independiente de MariaDB: solo almacena respuestas temporales.
 CACHE_PATH = Path(os.getenv("CACHE_PATH", "/data/cache.sqlite3"))
 CACHE_TTL = timedelta(seconds=int(os.getenv("CACHE_TTL_SECONDS", "86400")))
@@ -58,7 +64,7 @@ JDBC_JARS = [str(path) for path in Path(JDBC).glob("*.jar")]
 if not jpype.isJVMStarted():
     jpype.startJVM(classpath=JDBC_JARS)
 
-engine = create_engine(MARIADB_URL, pool_pre_ping=True)
+engine = create_engine(MARIADB_URL, pool_pre_ping=True, connect_args={"check_same_thread": False} if USE_SQLITE else {})
 Session = sessionmaker(engine, expire_on_commit=False)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -204,6 +210,13 @@ def jdbc_spec(kind: str) -> tuple[str, str, list[str]]:
     return "org.h2.Driver", os.getenv("H2_URL", ""), [f"{JDBC}/h2.jar"]
 
 
+def source_configured(kind: str) -> bool:
+    """Indica si la fuente historica tiene direccion configurada."""
+    if kind == "oracle":
+        return bool(os.getenv("ORACLE_HOST"))
+    return bool(jdbc_spec(kind)[1])
+
+
 @contextmanager
 def source_connection(kind: str) -> Iterator[Any]:
     """Gestiona la conexión a Oracle Thin o al motor JDBC correspondiente."""
@@ -321,6 +334,8 @@ def find_history(name: str | None, house: str | None, limit: int) -> list[Studen
     result: list[StudentOut] = []
     for current_house in houses:
         kind = SOURCES[current_house]["kind"]
+        if not source_configured(kind):
+            continue
         try:
             with source_connection(kind) as connection:
                 cursor = connection.cursor()
@@ -504,23 +519,27 @@ def identity_prefix(value: str, size: int) -> str:
 @contextmanager
 def identity_session() -> Iterator[Any]:
     with engine.connect() as connection:
-        locked = connection.execute(text("SELECT GET_LOCK('student_identity', 15)")).scalar()
-        connection.commit()
-        if locked != 1:
-            raise HTTPException(503, "No se pudo reservar el identificador; vuelve a intentarlo")
+        if not USE_SQLITE:
+            locked = connection.execute(text("SELECT GET_LOCK('student_identity', 15)")).scalar()
+            connection.commit()
+            if locked != 1:
+                raise HTTPException(503, "No se pudo reservar el identificador; vuelve a intentarlo")
         try:
             with Session(bind=connection) as session:
                 with session.begin():
                     yield session
         finally:
-            connection.execute(text("SELECT RELEASE_LOCK('student_identity')"))
-            connection.commit()
+            if not USE_SQLITE:
+                connection.execute(text("SELECT RELEASE_LOCK('student_identity')"))
+                connection.commit()
 
 
 def generate_student_id(session: Any, data: EnrollmentIn, exclude_id: str | None = None) -> str:
     base = "-".join((identity_prefix(data.house, 2), identity_prefix(data.full_name, 3), identity_prefix(first_surname(data.apellido), 3)))
     used = set(session.scalars(select(Enrollment.student_id)).all())
     for config in SOURCES.values():
+        if not source_configured(config["kind"]):
+            continue
         try:
             with source_connection(config["kind"]) as connection:
                 cursor = connection.cursor()
