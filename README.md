@@ -34,17 +34,17 @@ La API centraliza el acceso a los datos. Cada cliente ofrece una experiencia dis
 DumbleFX ───────┐
 Dumbledroid ────┼── HTTP/HTTPS + JSON + X-API-Key ── API FastAPI
 DumbleUnity ────┘                                      │
-                                                     ├── MariaDB: matrículas
+                                                     ├── MariaDB: réplica de matrículas
                                                      ├── Derby: histórico
                                                      ├── HSQLDB: histórico
                                                      ├── H2: histórico
                                                      ├── Oracle: histórico
-                                                     └── SQLite: caché histórica
+                                                     └── SQLite: matrículas (primera escritura) y caché histórica
 ```
 
-Los clientes se comunican con la API, no directamente con las bases de datos. SQLite reduce consultas históricas repetidas, pero no sustituye a las fuentes originales.
+Los clientes se comunican con la API, no directamente con las bases de datos. SQLite guarda primero las matrículas nuevas y reduce consultas históricas repetidas, pero no sustituye a las fuentes originales.
 
-Docker Compose reúne la API y sus servidores de bases de datos. Los CSV de `API/data/` permiten inicializar las tablas correspondientes cuando están vacías. Los cambios posteriores en las matrículas se guardan en MariaDB.
+Docker Compose reúne la API y sus servidores de bases de datos. Los CSV de `API/data/` permiten inicializar las tablas correspondientes cuando están vacías. Las matrículas nuevas se guardan primero en SQLite y se replican en MariaDB.
 
 ## Estructura
 

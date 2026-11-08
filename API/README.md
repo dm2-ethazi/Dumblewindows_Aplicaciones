@@ -6,7 +6,7 @@ Servicio HTTP desarrollado con FastAPI para consultar estudiantes históricos y 
 
 - **MariaDB** guarda las matrículas y los datos de prueba de `data/Central.csv`; permite crearlas, modificarlas y eliminarlas.
 - **Derby, HSQLDB, H2 y Oracle** alojan los registros históricos de las cuatro casas. La API los consulta, sin ofrecer operaciones de escritura sobre ellos.
-- **SQLite** conserva temporalmente resultados históricos para acelerar consultas repetidas. No sustituye a las bases de datos.
+- **SQLite** guarda primero las matrículas nuevas y conserva temporalmente resultados históricos para acelerar consultas repetidas. MariaDB replica esas matrículas.
 
 La consulta de estudiantes combina MariaDB con los datos históricos y evita duplicados. Las búsquedas por identificador admiten IDs base con variantes. Los datos CSV se usan para inicializar las tablas históricas vacías y las matrículas de Central en MariaDB.
 
@@ -16,7 +16,7 @@ FastAPI expone las rutas y la documentación interactiva. Las consultas y operac
 
 La ruta `/salud` comprueba la API y MariaDB. `/docs` ofrece Swagger UI; también están disponibles `/redoc` y `/openapi.json`. Las conexiones de bases de datos son internas a la red de Docker. SQLite se guarda en un volumen persistente.
 
-La inicialización puede crear tablas y cargar los CSV cuando las tablas están vacías. Por ello, el primer arranque escribe los datos iniciales en los motores históricos y carga `data/Central.csv` en `enrollments` de MariaDB si esa tabla está vacía. Si ya contiene alguna matrícula, no se importa Central: no se sobrescriben ni se mezclan los datos existentes. La carga conserva los IDs del CSV, valida nombres, apellidos, fechas y casa Central, y se confirma en una sola transacción; si hay un error, se revierte la carga completa. Reiniciar con una tabla no vacía no duplica ni restaura filas eliminadas. Si se vacía por completo, el siguiente arranque vuelve a cargarla. Los cambios hechos a matrículas se guardan en MariaDB. Los volúmenes Docker conservan datos entre reinicios.
+La inicialización puede crear tablas y cargar los CSV cuando las tablas están vacías. Por ello, el primer arranque escribe los datos iniciales en los motores históricos y carga `data/Central.csv` en `enrollments` de MariaDB si esa tabla está vacía. Si ya contiene alguna matrícula, no se importa Central: no se sobrescriben ni se mezclan los datos existentes. La carga conserva los IDs del CSV, valida nombres, apellidos, fechas y casa Central, y se confirma en una sola transacción; si hay un error, se revierte la carga completa. Reiniciar con una tabla no vacía no duplica ni restaura filas eliminadas. Si se vacía por completo, el siguiente arranque vuelve a cargarla. Las matrículas nuevas se guardan primero en SQLite y después se replican en MariaDB; si MariaDB no confirma el alta, la fila queda pendiente y se reintenta al arrancar. Los volúmenes Docker conservan datos entre reinicios.
 
 ## Por qué está organizado así
 
@@ -24,7 +24,7 @@ Separar matrículas nuevas de los registros históricos evita modificar las fuen
 
 ## Contenido
 
-- `app/main.py`: aplicación, endpoints, autenticación, consultas y caché.
+- `app/`: `main.py` monta la aplicación; `config.py` y `security.py` agrupan configuración y clave; `db/` accede a MariaDB y SQLite; `models/` define la tabla y los esquemas; `services/` contiene históricos, consultas y matrículas; `routers/` declara las rutas.
 - `compose.yaml`: API y servicios de base de datos aislados en Docker.
 - `Dockerfile`, `db-image/`: imágenes de la API y de los motores JDBC.
 - `init/mariadb.sql`: esquema inicial para matrículas nuevas.
