@@ -2308,7 +2308,7 @@ MonoBehaviour:
   popup: {fileID: 275144341}
   popupAviso: {fileID: 2020609044592249866}
   popupSeleccion: {fileID: 2520369085777632859}
-  urlBase: 
+  urlBase: https://dumblewindows-aplicaciones.onrender.com/estudiantes
   nombreCabecera: X-API-Key
   apiKey: 
   usarBearer: 0
