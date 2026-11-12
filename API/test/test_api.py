@@ -1,17 +1,20 @@
-import importlib.util
+import importlib
 import os
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from functools import partial
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+API_ROOT = Path(__file__).resolve().parents[1]
+if str(API_ROOT) not in sys.path:
+    sys.path.insert(0, str(API_ROOT))
 
 
 class ApiTests(unittest.TestCase):
@@ -22,21 +25,21 @@ class ApiTests(unittest.TestCase):
         drivers['jpype'].isJVMStarted.return_value = True
         for name in ('jaydebeapi', 'oracledb'):
             drivers[name].connect.side_effect = AssertionError('Conexion externa no permitida')
-        module_path = Path(__file__).resolve().parents[1] / 'app' / 'main.py'
-        spec = importlib.util.spec_from_file_location('api_under_test', module_path)
-        cls.api = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = cls.api
         with patch.dict(sys.modules, drivers), patch.dict(os.environ, {
             'MARIADB_URL': 'sqlite://',
             'CACHE_PATH': str(Path(cls.import_directory.name) / 'cache.sqlite3'),
             'HISTORY_CSV_DIR': cls.import_directory.name,
         }):
-            spec.loader.exec_module(cls.api)
+            cls.api = importlib.import_module('app.main')
+            cls.mariadb = importlib.import_module('app.db.mariadb')
+            cls.sqlite = importlib.import_module('app.db.sqlite')
+            cls.history = importlib.import_module('app.services.history')
+            cls.enrollments = importlib.import_module('app.services.enrollments')
+            cls.schemas = importlib.import_module('app.models.schemas')
 
     @classmethod
     def tearDownClass(cls):
-        cls.api.engine.dispose()
-        sys.modules.pop('api_under_test', None)
+        cls.mariadb.engine.dispose()
         cls.import_directory.cleanup()
 
     def setUp(self):
@@ -45,19 +48,8 @@ class ApiTests(unittest.TestCase):
         database_path = Path(self.directory.name) / 'enrollments.sqlite3'
         self.engine = create_engine(f'sqlite:///{database_path.as_posix()}', connect_args={'check_same_thread': False})
         self.addCleanup(self.engine.dispose)
-        self.api.Base.metadata.create_all(self.engine)
+        self.mariadb.Base.metadata.create_all(self.engine)
         self.session = sessionmaker(self.engine, expire_on_commit=False)
-        cache_connections = []
-        original_cache_db = self.api.cache_db
-        self.addCleanup(lambda: [connection.close() for connection in cache_connections])
-        sqlite_connect = patch.object(self.api.sqlite3, 'connect', partial(self.api.sqlite3.connect, check_same_thread=False))
-        sqlite_connect.start()
-        self.addCleanup(sqlite_connect.stop)
-
-        def cache_db():
-            connection = original_cache_db()
-            cache_connections.append(connection)
-            return connection
 
         @contextmanager
         def identity_session():
@@ -70,20 +62,19 @@ class ApiTests(unittest.TestCase):
             connection.cursor.return_value.fetchall.return_value = []
             yield connection
 
-        replacements = {
-            'engine': self.engine,
-            'Session': self.session,
-            'CACHE_PATH': Path(self.directory.name) / 'cache.sqlite3',
-            'CSV_DIR': Path(self.directory.name),
-            'cache_db': cache_db,
-            'identity_session': identity_session,
-            'source_connection': source_connection,
-            'find_history': MagicMock(return_value=[]),
-            'query_history': MagicMock(return_value=None),
-            'query_history_by_base': MagicMock(return_value=[]),
-        }
-        for name, value in replacements.items():
-            patcher = patch.object(self.api, name, value)
+        replacements = [
+            (self.mariadb, 'engine', self.engine),
+            (self.mariadb, 'Session', self.session),
+            (self.mariadb, 'identity_session', identity_session),
+            (self.sqlite, 'CACHE_PATH', Path(self.directory.name) / 'cache.sqlite3'),
+            (self.history, 'CSV_DIR', Path(self.directory.name)),
+            (self.history, 'source_connection', source_connection),
+            (self.history, 'find_history', MagicMock(return_value=[])),
+            (self.history, 'query_history', MagicMock(return_value=None)),
+            (self.history, 'query_history_by_base', MagicMock(return_value=[])),
+        ]
+        for module, name, value in replacements:
+            patcher = patch.object(module, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
         environment = patch.dict(os.environ, {'API_ACCESS_KEY': 'clave-ficticia-solo-test'})
@@ -137,6 +128,26 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(student['student_id'], 'CE-ANA-LOP')
         self.assertEqual(student['house'], 'Central')
 
+    def test_alta_guarda_en_sqlite_antes_de_mariadb(self):
+        student = self.create_student()
+        local = self.sqlite.enrollment(student['student_id'])
+        self.assertIsNotNone(local)
+        self.assertEqual(local['full_name'], 'Ana')
+        self.assertEqual(local['synced'], 1)
+        self.assertEqual(local['mariadb_id'], student['id'])
+
+    def test_pendiente_se_replica_al_arrancar(self):
+        self.sqlite.save_enrollment({
+            'student_id': 'CE-LUI-PER', 'full_name': 'Luis', 'apellido': 'Perez',
+            'house': 'Central', 'birth_date': None,
+        })
+        self.assertEqual([row['student_id'] for row in self.sqlite.pending()], ['CE-LUI-PER'])
+        self.enrollments.push_pending()
+        self.assertEqual(self.sqlite.pending(), [])
+        detail = self.client.get('/estudiantes/CE-LUI-PER', headers=self.headers)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()['nombre'], 'Luis')
+
     def test_identificadores_repetidos(self):
         first = self.create_student()
         second = self.create_student()
@@ -180,6 +191,8 @@ class ApiTests(unittest.TestCase):
         response = self.client.put('/matriculas/' + student['student_id'], headers=self.headers, json=payload)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['student_id'], 'CE-ELE-LOP')
+        self.assertIsNotNone(self.sqlite.enrollment('CE-ELE-LOP'))
+        self.assertIsNone(self.sqlite.enrollment(student['student_id']))
 
     def test_eliminar_matricula(self):
         student = self.create_student()
@@ -194,7 +207,7 @@ class ApiTests(unittest.TestCase):
 
     def test_historicos_sin_duplicar_matricula(self):
         student = self.create_student()
-        self.api.find_history.return_value = [self.api.StudentOut(
+        self.history.find_history.return_value = [self.schemas.StudentOut(
             id=student['student_id'], nombre='Otro', apellido='Historico', casa='Central', origen='derby')]
         response = self.client.get('/estudiantes', headers=self.headers)
         self.assertEqual(response.status_code, 200)
@@ -202,14 +215,13 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()[0]['origen'], 'mariadb')
 
     def test_cache_temporal(self):
-        self.assertIsNone(self.api.cached('prueba'))
-        self.api.cache('prueba', {'nombre': 'Ana'})
-        self.assertEqual(self.api.cached('prueba'), {'nombre': 'Ana'})
-        with self.api.cache_db() as database:
-            expired = (datetime.utcnow() - self.api.CACHE_TTL - timedelta(seconds=1)).isoformat()
+        self.assertIsNone(self.sqlite.cached('prueba'))
+        self.sqlite.cache('prueba', {'nombre': 'Ana'})
+        self.assertEqual(self.sqlite.cached('prueba'), {'nombre': 'Ana'})
+        with self.sqlite.connection() as database:
+            expired = (datetime.utcnow() - self.sqlite.CACHE_TTL - timedelta(seconds=1)).isoformat()
             database.execute('UPDATE student_cache SET cached_at=? WHERE cache_key=?', (expired, 'prueba'))
-            database.commit()
-        self.assertIsNone(self.api.cached('prueba'))
+        self.assertIsNone(self.sqlite.cached('prueba'))
 
     def test_alias_en_ingles(self):
         response = self.client.get('/students', headers=self.headers)
@@ -221,15 +233,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('/matriculas', response.json()['paths'])
         self.assertNotIn('/enrollments', response.json()['paths'])
-    
+
     def test_consulta_devuelve_fecha_nacimiento(self):
-            student = self.client.post('/matriculas', headers=self.headers, json={**self.payload, 'birth_date': '2001-03-14'}).json()
-            detail = self.client.get('/estudiantes/' + student['student_id'], headers=self.headers).json()
-            detail = detail[0] if isinstance(detail, list) else detail
-            self.assertEqual(detail['nacimiento'], '2001-03-14')
-            self.assertEqual(detail['fecha_nacimiento'], '2001-03-14')
-            found = self.client.get('/estudiantes', headers=self.headers, params={'name': 'Ana'}).json()
-            self.assertIn('2001-03-14', [item['nacimiento'] for item in found])
+        student = self.client.post('/matriculas', headers=self.headers, json={**self.payload, 'birth_date': '2001-03-14'}).json()
+        detail = self.client.get('/estudiantes/' + student['student_id'], headers=self.headers).json()
+        detail = detail[0] if isinstance(detail, list) else detail
+        self.assertEqual(detail['nacimiento'], '2001-03-14')
+        self.assertEqual(detail['fecha_nacimiento'], '2001-03-14')
+        found = self.client.get('/estudiantes', headers=self.headers, params={'name': 'Ana'}).json()
+        self.assertIn('2001-03-14', [item['nacimiento'] for item in found])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

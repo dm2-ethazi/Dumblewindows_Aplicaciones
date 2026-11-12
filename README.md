@@ -21,12 +21,12 @@ La API centraliza el acceso a los datos. Cada cliente ofrece una experiencia dis
 
 | Módulo | Aplicación | Funcionalidades |
 | --- | --- | --- |
-| [API](API/) | Servicio de estudiantes | Consulta de registros históricos y gestión de matrículas en MariaDB. |
+| [API](API/) | Servicio de estudiantes | Consulta de registros históricos y gestión de matrículas en SQLite y MariaDB. |
 | [JavaFX](JavaFX/) | DumbleFX | Consulta por ID o datos y creación, actualización y eliminación de matrículas. Interfaz en español, inglés y euskera. |
 | [Android](Android/) | Dumbledroid | Consulta de estudiantes y conservación temporal de resultados en el dispositivo. No modifica los datos del servidor. |
 | [Unity](Unity/) | DumbleUnity | Búsqueda de estudiantes por nombre y visualización de su patronus animado en pixel art. Proyecto orientado a Windows y Android. |
 
-> Las altas, modificaciones y eliminaciones afectan a las **matrículas de MariaDB**, no a los registros históricos de las casas.
+> Las altas se guardan primero en **SQLite** y después se replican en las **matrículas de MariaDB**; las modificaciones y eliminaciones afectan a MariaDB y a su copia local. Ninguna operación toca los registros históricos de las casas.
 
 ## Arquitectura
 
@@ -34,17 +34,17 @@ La API centraliza el acceso a los datos. Cada cliente ofrece una experiencia dis
 DumbleFX ───────┐
 Dumbledroid ────┼── HTTP/HTTPS + JSON + X-API-Key ── API FastAPI
 DumbleUnity ────┘                                      │
-                                                     ├── MariaDB: matrículas
+                                                     ├── MariaDB: réplica de matrículas
                                                      ├── Derby: histórico
                                                      ├── HSQLDB: histórico
                                                      ├── H2: histórico
                                                      ├── Oracle: histórico
-                                                     └── SQLite: caché histórica
+                                                     └── SQLite: matrículas (primera escritura) y caché histórica
 ```
 
-Los clientes se comunican con la API, no directamente con las bases de datos. SQLite reduce consultas históricas repetidas, pero no sustituye a las fuentes originales.
+Los clientes se comunican con la API, no directamente con las bases de datos. SQLite guarda primero las matrículas nuevas y reduce consultas históricas repetidas, pero no sustituye a las fuentes originales.
 
-Docker Compose reúne la API y sus servidores de bases de datos. Los CSV de `API/data/` permiten inicializar las tablas correspondientes cuando están vacías. Los cambios posteriores en las matrículas se guardan en MariaDB.
+Docker Compose reúne la API y sus servidores de bases de datos. Los CSV de `API/data/` permiten inicializar las tablas correspondientes cuando están vacías. Las matrículas nuevas se guardan primero en SQLite y se replican en MariaDB.
 
 ## Estructura
 
@@ -209,9 +209,9 @@ El cliente JavaFX selecciona la versión por petición según el esquema: **HTTP
 | GET | `/salud` | Estado del servicio y MariaDB. |
 | GET | `/estudiantes` | Buscar por nombre, casa y límite de resultados. |
 | GET | `/estudiantes/{student_id}` | Consultar por identificador. |
-| POST | `/matriculas` | Crear una matrícula en MariaDB. |
-| PUT | `/matriculas/{student_id}` | Actualizar una matrícula. |
-| DELETE | `/matriculas/{student_id}` | Eliminar una matrícula. |
+| POST | `/matriculas` | Crear una matrícula: primero SQLite, después MariaDB. |
+| PUT | `/matriculas/{student_id}` | Actualizar una matrícula en MariaDB y su copia local. |
+| DELETE | `/matriculas/{student_id}` | Eliminar una matrícula en MariaDB y su copia local. |
 
 Las operaciones de consulta y matrícula requieren `X-API-Key`. La documentación interactiva está en `/docs`; consulta allí los campos, validaciones y respuestas del servidor utilizado.
 

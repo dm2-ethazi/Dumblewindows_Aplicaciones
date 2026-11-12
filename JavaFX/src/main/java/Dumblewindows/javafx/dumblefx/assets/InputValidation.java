@@ -1,5 +1,8 @@
 package Dumblewindows.javafx.dumblefx.assets;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.regex.Pattern;
 
 /**
@@ -66,5 +69,21 @@ public final class InputValidation {
      */
     public static boolean isName(String value) {
         return value != null && !value.isBlank() && allowsNameInput(value);
+    }
+
+    /**
+     * Convierte la fecha recibida de la API, que llega como dd/MM/yyyy,
+     * admitiendo también el formato ISO AAAA-MM-DD.
+     *
+     * @param value fecha recibida de la API, no vacía
+     * @return fecha interpretada como calendario
+     * @throws DateTimeParseException si no coincide con ninguno de los dos formatos
+     */
+    public static LocalDate parseBirthDate(String value) {
+        try {
+            return LocalDate.parse(value, DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        } catch (DateTimeParseException error) {
+            return LocalDate.parse(value);
+        }
     }
 }

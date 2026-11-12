@@ -198,7 +198,7 @@ public final class StudentController {
             houseField.setText("Central");
             String birth = alumno.getNacimiento();
             try {
-                birthDatePicker.setValue(birth == null || birth.isBlank() ? null : LocalDate.parse(birth));
+                birthDatePicker.setValue(birth == null || birth.isBlank() ? null : InputValidation.parseBirthDate(birth));
             } catch (DateTimeParseException error) {
                 birthDatePicker.setValue(null);
                 I18n.message(status.textProperty(), "validation.date");
